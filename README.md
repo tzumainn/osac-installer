@@ -137,21 +137,116 @@ Use Kustomize to manage your environment-specific configurations.
 > Kustomize documentation.](https://kubectl.docs.kubernetes.io/references/kustomize/)
 
 
-### Obtaining an AAP License
+### Obtaining an AAP License (Subscription Manifest)
 
-Download AAP license manifest from [Red Hat Customer
-Portal](https://access.redhat.com/downloads/content/480/ver=2.5/rhel---9/2.5/x86_64/product-software)
+The AAP license is a **Subscription Manifest** (a `.zip` file), not a key file. To
+obtain it:
+
+1. **Log in** to the [Red Hat Customer Portal](https://access.redhat.com/).
+2. **Navigate** to **Subscriptions** > **Subscription Allocations**.
+3. **Create or select an allocation:** If you haven't created one, click
+   "New Subscription Allocation" and set the type (usually "Satellite 6.x").
+4. **Add entitlements:** Click on your allocation, go to the **Subscriptions** tab,
+   and add your Ansible Automation Platform subscriptions.
+5. **Download:** Click **Export Manifest** to download the `.zip` file.
+
+Place the downloaded `license.zip` file in `overlays/<project-name>/files/`. You will
+also upload this manifest into the AAP controller UI after deployment.
+
+## Pre-Installation Steps
+
+Before deploying OSAC, complete the following steps to prepare your environment.
+
+### 1. Initialize Submodules
+
+The OSAC installer relies on external components managed as Git submodules. Before
+running Kustomize, you must pull the manifest files into your local directory:
+
+```bash
+$ git submodule update --init --recursive
+```
+
+### 2. Populate Local Secrets
+
+Ensure your overlay contains the necessary secret files that are excluded from Git:
+
+- **AAP License:** Place `license.zip` in `overlays/<project-name>/files/`.
+- **Quay Pull Secret:** Place `quay-pull-secret.json` in `overlays/<project-name>/files/`.
 
 ## Deploying OSAC Components
 
-Once you have customized your overlay, deploy the OSAC components to your cluster.
+### Option A: Automated Setup (Recommended)
 
-### Install and Monitor Progress
+The `scripts/setup.sh` script automates the entire installation process, including:
+
+- Installing prerequisite operators (cert-manager, trust-manager, Authorino, Keycloak, AAP)
+- Setting up the CA issuer and network attachment definitions
+- Applying the Kustomize overlay
+- Waiting for the AAP bootstrap job to complete
+- Creating the hub access kubeconfig and registering the hub with the fulfillment service
+
+To run the automated setup:
 
 ```bash
-# Deploy using your project-specific overlay
-$ oc apply -k overlays/<project-name>
+# Using defaults (namespace: osac-devel, overlay: development)
+$ ./scripts/setup.sh
 
+# Or customize the namespace and overlay
+$ INSTALLER_NAMESPACE=<project-name> INSTALLER_KUSTOMIZE_OVERLAY=<project-name> ./scripts/setup.sh
+```
+
+> **Note:** The script requires `fulfillment-cli` to be installed and available in your
+> `PATH` (see [Fulfillment CLI: Setup & Usage](#fulfillment-cli-setup--usage) below for
+> installation instructions).
+
+The script will wait for all components to be ready before proceeding to the next step.
+Once it completes successfully, OSAC is fully operational.
+
+### Option B: Manual Installation
+
+If you prefer to install step-by-step, or need to install individual prerequisites,
+follow the manual process below.
+
+#### Install Required Operators
+
+OSAC requires several operators to be present on the cluster. The prerequisite manifests
+are located in the `prerequisites/` directory. You can check if an operator is already
+installed by running `oc get crd <crd-name>`.
+
+```bash
+# Install cert-manager
+$ oc apply -k prerequisites/cert-manager
+
+# Install trust-manager
+$ oc apply -f prerequisites/trust-manager.yaml
+
+# Install CA issuer
+$ oc apply -f prerequisites/ca-issuer.yaml
+
+# Install Authorino operator
+$ oc apply -f prerequisites/authorino-operator.yaml
+
+# Install Keycloak
+$ oc apply -k prerequisites/keycloak/
+
+# Install AAP operator
+$ oc apply -f prerequisites/aap-installation.yaml
+```
+
+> **Tip:** Wait for each operator deployment to become available before proceeding to
+> the next. For example: `oc wait --for=condition=Available deployment/cert-manager -n cert-manager --timeout=300s`
+
+#### Apply the Kustomize Overlay
+
+Once all prerequisites are ready, deploy OSAC:
+
+```bash
+$ oc apply -k overlays/<project-name>
+```
+
+### Monitor Progress
+
+```bash
 # Monitor pod creation and startup
 $ watch oc get -n <project-name> pods
 ```
