@@ -43,15 +43,8 @@ secretGenerator:
     disableNameSuffixHash: true
   literals:
     - AAP_EE_IMAGE=ghcr.io/osac-project/osac-aap:latest
-    - AAP_PROJECT_GIT_URL="https://github.com/osac-project/osac-aap"
-    - AAP_PROJECT_GIT_BRANCH="main"
-
-- name: cluster-fulfillment-ig
-  options:
-    labels:
-      osac.openshift.io/project: osac-aap
-  literals:
-    - OSAC_VM_OPERATIONS_STORAGE_CLASS="lvms-vg1"
+    - AAP_PROJECT_GIT_URI=https://github.com/osac-project/osac-aap
+    - AAP_PROJECT_GIT_BRANCH=main
 
 - name: publish-templates-ig
   literals:
@@ -91,8 +84,22 @@ patches:
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value:
+          name: OSAC_ENABLE_NETWORKING_CONTROLLER
+          value: "true"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
           name: OSAC_MINIMUM_REQUEST_INTERVAL
           value: "2m"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: OSAC_AAP_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: osac-aap-api-token
+              key: token
+              optional: true
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value:

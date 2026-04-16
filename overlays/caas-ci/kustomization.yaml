@@ -1,7 +1,7 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
-namespace: osac-devel
+namespace: osac-e2e-ci
 
 # This applies a name prefix to cluster-scoped resources (ClusterRoles,
 # ClusterRoleBindings) but does not modify namespaced resources.
@@ -12,12 +12,11 @@ labels:
 - includeSelectors: true
   pairs:
     app.kubernetes.io/managed-by: kustomize
-    environment: development
+    environment: ci
 
 resources:
 - ../../base
 - ./ca-trust-bundle.yaml
-- ./capi-provider-role.yaml
 
 generatorOptions:
   disableNameSuffixHash: true
@@ -44,7 +43,7 @@ secretGenerator:
     disableNameSuffixHash: true
   literals:
     - AAP_EE_IMAGE=ghcr.io/osac-project/osac-aap:latest
-    - AAP_PROJECT_GIT_URI="https://github.com/osac-project/osac-aap"
+    - AAP_PROJECT_GIT_URI=https://github.com/osac-project/osac-aap
     - AAP_PROJECT_GIT_BRANCH=main
 
 - name: publish-templates-ig
@@ -75,23 +74,23 @@ patches:
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value:
-          name: OSAC_PROVISIONING_PROVIDER
-          value: "aap"
+          name: OSAC_ENABLE_CLUSTER_CONTROLLER
+          value: "true"
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value:
-          name: OSAC_AAP_TEMPLATE_PREFIX
-          value: osac
+          name: OSAC_ENABLE_TENANT_CONTROLLER
+          value: "true"
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value:
-          name: OSAC_AAP_PROVISION_TEMPLATE
-          value: osac-create-virtual-network
+          name: OSAC_ENABLE_NETWORKING_CONTROLLER
+          value: "true"
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value:
-          name: OSAC_AAP_URL
-          value: "https://osac-aap.osac-devel.apps.<cluster-name>.<base-domain>/api/controller"
+          name: OSAC_MINIMUM_REQUEST_INTERVAL
+          value: "2m"
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value:
@@ -106,16 +105,6 @@ patches:
         value:
           name: OSAC_AAP_INSECURE_SKIP_VERIFY
           value: "true"
-      - op: add
-        path: /spec/template/spec/containers/0/env/-
-        value:
-          name: OSAC_AAP_STATUS_POLL_INTERVAL
-          value: "30s"
-      - op: add
-        path: /spec/template/spec/containers/0/env/-
-        value:
-          name: OSAC_MINIMUM_REQUEST_INTERVAL
-          value: "2m"
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value:
@@ -145,7 +134,7 @@ patches:
               path: ca-bundle.crt
             mountPath: /etc/pki/tls/certs
   # Override issuerUrl (base has :8001, we use port 443 via service mapping)
-  # and admin_subjects for osac-devel namespace
+  # and admin_subjects for osac-e2e-ci namespace
   - patch: |
       apiVersion: authorino.kuadrant.io/v1beta3
       kind: AuthConfig
@@ -162,12 +151,12 @@ patches:
               rego: |
                 import future.keywords.in
 
-                # Define admin subjects for osac-devel namespace:
+                # Define admin subjects for osac-e2e-ci namespace:
                 admin_subjects := {
-                  "system:serviceaccount:osac-devel:admin",
-                  "system:serviceaccount:osac-devel:controller",
-                  "system:serviceaccount:osac-devel:template-publisher",
-                  "system:serviceaccount:osac-devel:osac-operator-controller-manager",
+                  "system:serviceaccount:osac-e2e-ci:admin",
+                  "system:serviceaccount:osac-e2e-ci:controller",
+                  "system:serviceaccount:osac-e2e-ci:template-publisher",
+                  "system:serviceaccount:osac-e2e-ci:osac-operator-controller-manager",
                 }
 
                 # Get the gRPC method:
@@ -236,16 +225,7 @@ patches:
                     "/osac.public.v1.Clusters/GetPasswordViaHttp",
                     "/osac.public.v1.Clusters/List",
                     "/osac.public.v1.Clusters/Update",
-                    "/osac.public.v1.ComputeInstanceTemplates/Get",
-                    "/osac.public.v1.ComputeInstanceTemplates/List",
-                    "/osac.public.v1.ComputeInstances/Create",
-                    "/osac.public.v1.ComputeInstances/Delete",
-                    "/osac.public.v1.ComputeInstances/Get",
-                    "/osac.public.v1.ComputeInstances/List",
-                    "/osac.public.v1.ComputeInstances/Update",
                     "/osac.public.v1.Events/Watch",
-                    "/osac.public.v1.HostClasses/Get",
-                    "/osac.public.v1.HostClasses/List",
                   }
                 }
 
