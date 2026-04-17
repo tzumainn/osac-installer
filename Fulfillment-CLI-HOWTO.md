@@ -378,8 +378,8 @@ oc get configmap fulfillment-service-config-xxx -n fulfillment-system -o jsonpat
       '/fulfillment.v1.Clusters/GetKubeconfig',
       '/fulfillment.v1.Clusters/List',
       '/fulfillment.v1.Clusters/Update',
-      '/fulfillment.v1.HostClasses/Get',
-      '/fulfillment.v1.HostClasses/List'
+      '/fulfillment.v1.HostTypes/Get',
+      '/fulfillment.v1.HostTypes/List'
     ]
 
 # Allow everything to admin service accounts
@@ -1581,16 +1581,16 @@ oc exec deployment/fulfillment-service -n fulfillment-system -c server -- lsof -
 ./fulfillment-cli describe clustertemplate TEMPLATE_ID
 ```
 
-**Host Classes:**
+**Host Types:**
 ```bash
-# List host classes
-./fulfillment-cli get hostclasses [--output table|json|yaml]
+# List host types
+./fulfillment-cli get hosttypes [--output table|json|yaml]
 
-# Get specific host class
-./fulfillment-cli get hostclass HOSTCLASS_ID [--output table|json|yaml]
+# Get specific host type
+./fulfillment-cli get hosttype HOSTTYPE_ID [--output table|json|yaml]
 
-# Describe host class
-./fulfillment-cli describe hostclass HOSTCLASS_ID
+# Describe host type
+./fulfillment-cli describe hosttype HOSTTYPE_ID
 ```
 
 **Configuration Management:**
