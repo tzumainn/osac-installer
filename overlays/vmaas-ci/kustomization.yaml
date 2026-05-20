@@ -41,9 +41,9 @@ secretGenerator:
   options:
     disableNameSuffixHash: true
   literals:
-    - AAP_EE_IMAGE=ghcr.io/osac-project/osac-aap:sha-744bc2c
+    - AAP_EE_IMAGE=ghcr.io/osac-project/osac-aap:sha-1e2c4d2
     - AAP_PROJECT_GIT_URI=https://github.com/osac-project/osac-aap
-    - AAP_PROJECT_GIT_BRANCH=744bc2ca0f8e393f8c4be1116956d2c4b1329060
+    - AAP_PROJECT_GIT_BRANCH=1e2c4d28a74b89134b5fdd73190f96e85172260e
 
 - name: cluster-fulfillment-ig
   options:
@@ -375,7 +375,7 @@ patches:
                 # Note: Tenant admins can manage users. IdP managers cannot (they only manage IdP config).
                 # OPA performs method-level authorization (can this user call this method?).
                 # The application layer enforces resource-level authorization via the generic server's
-                # determineAssignedTenants validation, which ensures users can only assign tenants they have visibility to.
+                # determineAssignedTenant validation, which ensures users can only assign a tenant they have visibility to.
                 allow if {
                   is_tenant_admin
                   grpc_method in {
