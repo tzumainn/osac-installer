@@ -46,12 +46,28 @@ if [[ -n "${INSTALLER_VM_TEMPLATE}" || -n "${INSTALLER_CLUSTER_TEMPLATE}" ]]; th
     done
     [[ -z "${JT_ID:-}" ]] && { echo "Failed to find osac-publish-templates AAP job template after 30 attempts"; exit 1; }
     echo "Launching publish-templates AAP job (template ID: ${JT_ID})..."
+    JOB_ID=""
     for attempt in $(seq 1 10); do
-        curl -kfsS -X POST -H "Authorization: Bearer ${AAP_TOKEN}" -H "Content-Type: application/json" \
-            "${AAP_URL}/api/controller/v2/job_templates/${JT_ID}/launch/" >/dev/null 2>&1 && break
+        JOB_RESPONSE=$(curl -kfsS -X POST -H "Authorization: Bearer ${AAP_TOKEN}" -H "Content-Type: application/json" \
+            "${AAP_URL}/api/controller/v2/job_templates/${JT_ID}/launch/" 2>/dev/null) && {
+            JOB_ID=$(echo "${JOB_RESPONSE}" | jq -r '.id // empty')
+            break
+        }
         echo "  launch attempt ${attempt}/10 - retrying in 10s..."
         sleep 10
     done
+    [[ -z "${JOB_ID}" ]] && { echo "ERROR: Failed to launch publish-templates job after 10 attempts"; exit 1; }
+    echo "  Job ${JOB_ID} launched, waiting for completion..."
+    retry_until 300 10 '[[ "$(curl -kfsS -H "Authorization: Bearer '"${AAP_TOKEN}"'" \
+        "'"${AAP_URL}"'/api/controller/v2/jobs/'"${JOB_ID}"'/" 2>/dev/null \
+        | jq -r ".status // empty")" =~ ^(successful|failed|error|canceled)$ ]]' || true
+    JOB_STATUS=$(curl -kfsS -H "Authorization: Bearer ${AAP_TOKEN}" \
+        "${AAP_URL}/api/controller/v2/jobs/${JOB_ID}/" 2>/dev/null | jq -r '.status // empty') || JOB_STATUS=""
+    if [[ "${JOB_STATUS}" != "successful" ]]; then
+        echo "WARNING: publish-templates job ${JOB_ID} finished with status: ${JOB_STATUS}"
+        curl -kfsS -H "Authorization: Bearer ${AAP_TOKEN}" \
+            "${AAP_URL}/api/controller/v2/jobs/${JOB_ID}/stdout/?format=txt" 2>/dev/null | tail -30 || true
+    fi
 
     if [[ -n "${INSTALLER_VM_TEMPLATE}" ]]; then
         echo "Waiting for computeinstancetemplate ${INSTALLER_VM_TEMPLATE} to be published..."

@@ -175,6 +175,21 @@ oc delete job -n "${INSTALLER_NAMESPACE}" --all --ignore-not-found
 sed -i '/aap\.yaml/d; /job\.yaml/d' base/osac-aap/config/base/kustomization.yaml
 oc apply -k "overlays/${INSTALLER_KUSTOMIZE_OVERLAY}"
 
+PULL_SECRET="/installer/overlays/${INSTALLER_KUSTOMIZE_OVERLAY}/files/quay-pull-secret.json"
+img_check_pids=()
+img_check_imgs=()
+img_check_logs=()
+while IFS= read -r img; do
+    [[ -z "${img}" ]] && continue
+    img_check_imgs+=("${img}")
+    log_file="$(mktemp)"
+    img_check_logs+=("${log_file}")
+    oc image info "${img}" -a "${PULL_SECRET}" &>"${log_file}" &
+    img_check_pids+=($!)
+done < <(oc get deploy,statefulset -n "${INSTALLER_NAMESPACE}" \
+    -o jsonpath='{range .items[*]}{range .spec.template.spec.containers[*]}{.image}{"\n"}{end}{range .spec.template.spec.initContainers[*]}{.image}{"\n"}{end}{end}' \
+    | sort -u | grep 'ghcr\.io/osac-project')
+
 # After recert, cert-manager reissues TLS certificates with the new cluster CA.
 # Pods that start before certs are ready crash loading the CA file. Wait for all
 # certificates to be reissued, then restart pods so they mount fresh secrets.
@@ -206,6 +221,25 @@ refresh_cdi_certificates() {
     echo "  CDI certificates refreshed"
 }
 
+refresh_metallb_certificates() {
+    # After recert, the MetalLB webhook server still has certs signed by the old
+    # CA. Delete the OLM-managed cert secret so it gets regenerated, then restart
+    # the webhook server pod to pick up the new cert.
+    if ! oc get crd ipaddresspools.metallb.io &>/dev/null; then
+        return 0
+    fi
+    echo "  Refreshing MetalLB webhook certificates..."
+    oc delete secret metallb-operator-webhook-server-cert -n metallb-system --ignore-not-found
+    oc delete pod -n metallb-system -l control-plane=controller-manager --ignore-not-found 2>/dev/null || true
+    oc delete pod -n metallb-system -l component=webhook-server --ignore-not-found 2>/dev/null || true
+    retry_until 120 5 '[[ "$(oc get deploy metallb-operator-webhook-server -n metallb-system -o jsonpath='"'"'{.status.readyReplicas}'"'"' 2>/dev/null)" == "1" ]]' || {
+        echo "WARNING: MetalLB webhook server did not become ready, continuing anyway"
+    }
+    echo "  MetalLB webhook certificates refreshed"
+}
+
+refresh_metallb_certificates
+
 echo "[4/9] Reconfiguring MetalLB for current subnet..."
 if oc get crd ipaddresspools.metallb.io &>/dev/null; then
     NODE_IP=$(oc get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
@@ -225,6 +259,14 @@ METALLBEOF
 else
     echo "  MetalLB not installed, skipping"
 fi
+
+for i in "${!img_check_pids[@]}"; do
+    if ! wait "${img_check_pids[$i]}"; then
+        echo "ERROR: Image preflight failed for: ${img_check_imgs[$i]}"
+        tail -5 "${img_check_logs[$i]}" 2>/dev/null || true
+        exit 1
+    fi
+done
 
 echo "[5/9] Waiting for TLS certificates and restarting pods..."
 refresh_cdi_certificates &
@@ -306,6 +348,10 @@ wait_aap_controller() {
         echo "Timed out waiting for AAP gateway after controller-task restart"
         exit 1
     }
+    # Component overrides can trigger AAP operator reconciliation that creates a
+    # new controller-task pod AFTER our recycle. Wait for the deployment to
+    # stabilize so we don't launch jobs on a half-ready pod.
+    oc rollout status deploy/osac-aap-controller-task -n "${INSTALLER_NAMESPACE}" --timeout=300s
     echo "[7/9] AAP controller Running, gateway responding"
 }
 
