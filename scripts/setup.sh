@@ -312,6 +312,16 @@ fi
 # Wait for Authorino to be ready (gRPC auth depends on it)
 wait_for_resource deployment/authorino condition=Available 300 ${INSTALLER_NAMESPACE}
 
+# Ensure Authorino can perform token reviews (required for Kubernetes SA authentication)
+if oc get clusterrolebinding authorino-tokenreview &>/dev/null; then
+    if ! oc get clusterrolebinding authorino-tokenreview -o json | \
+        jq -e '.subjects[] | select(.name=="authorino-authorino" and .namespace=="'"${INSTALLER_NAMESPACE}"'")' &>/dev/null; then
+        echo "Adding ${INSTALLER_NAMESPACE} Authorino SA to authorino-tokenreview ClusterRoleBinding..."
+        oc patch clusterrolebinding authorino-tokenreview --type=json \
+            -p '[{"op":"add","path":"/subjects/-","value":{"kind":"ServiceAccount","name":"authorino-authorino","namespace":"'"${INSTALLER_NAMESPACE}"'"}}]'
+    fi
+fi
+
 # Wait for fulfillment stack to be ready before running prepare scripts
 wait_for_resource deployment/fulfillment-grpc-server condition=Available 300 ${INSTALLER_NAMESPACE}
 wait_for_resource deployment/fulfillment-ingress-proxy condition=Available 300 ${INSTALLER_NAMESPACE}

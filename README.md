@@ -149,10 +149,23 @@ Use Kustomize to manage your environment-specific configurations.
      ```
      emergency_service_accounts := {
        "system:serviceaccount:<project-name>:admin",
+       "system:serviceaccount:<project-name>:controller",
+       "system:serviceaccount:<project-name>:template-publisher",
+       "system:serviceaccount:<project-name>:osac-operator-controller-manager",
      }
      ```
      If this is not updated, the `admin` ServiceAccount will get `PermissionDenied` errors
      when calling private API methods (e.g., hub registration during `setup.sh`).
+   - The `authorino-tokenreview` ClusterRoleBinding grants Authorino permission to
+     validate Kubernetes service account tokens. It must include your namespace's
+     Authorino SA. **If using `setup.sh`**, this is handled automatically.
+     **If deploying manually**, patch the ClusterRoleBinding:
+     ```bash
+     oc patch clusterrolebinding authorino-tokenreview --type=json -p '[
+       {"op":"add","path":"/subjects/-","value":{"kind":"ServiceAccount","name":"authorino-authorino","namespace":"<project-name>"}}
+     ]'
+     ```
+     If this is not configured, all gRPC calls will fail with `Unauthenticated` errors.
    - In `kustomization.yaml`: Replace `<cluster-name>.<base-domain>` in the `OSAC_AAP_URL`
      value with your cluster's actual domain (e.g., `mgmt.example.devcluster.openshift.com`).
      You can find it by running: `oc get ingresses.config/cluster -o jsonpath='{.spec.domain}'`
