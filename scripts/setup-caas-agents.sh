@@ -31,21 +31,40 @@ CLUSTER_DOMAIN=$(oc get ingresses.config/cluster -o jsonpath='{.spec.domain}')
 echo "Node IP: ${NODE_IP}"
 echo "Cluster domain: ${CLUSTER_DOMAIN}"
 
+SUBNET_PREFIX=$(echo "${NODE_IP}" | cut -d. -f1-3)
+cat <<METALLBEOF | oc apply -f -
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: caas-address-pool
+  namespace: metallb-system
+spec:
+  addresses:
+    - ${SUBNET_PREFIX}.240-${SUBNET_PREFIX}.250
+  autoAssign: true
+METALLBEOF
+echo "MetalLB IPAddressPool configured for ${SUBNET_PREFIX}.240-${SUBNET_PREFIX}.250"
+
 echo "[1/6] Registering '${AGENT_RESOURCE_CLASS}' host type in fulfillment service..."
 INTERNAL_API="https://$(oc get route fulfillment-internal-api -n "${INSTALLER_NAMESPACE}" -o jsonpath='{.status.ingress[0].host}')"
 TOKEN=$(oc create token -n "${INSTALLER_NAMESPACE}" admin)
-HTTP_CODE=$(curl -sk -o /dev/null -w "%{http_code}" -X POST "${INTERNAL_API}/api/private/v1/host_types" \
+RESPONSE_BODY=$(mktemp)
+HTTP_CODE=$(curl -sk -w "%{http_code}" -X POST "${INTERNAL_API}/api/private/v1/host_types" \
     -H "Authorization: Bearer ${TOKEN}" \
     -H "Content-Type: application/json" \
-    -d "{\"id\": \"${AGENT_RESOURCE_CLASS}\", \"title\": \"CI Worker\", \"description\": \"Worker nodes for CI testing\"}")
+    -d "{\"id\": \"${AGENT_RESOURCE_CLASS}\", \"title\": \"CI Worker\", \"description\": \"Worker nodes for CI testing\"}" \
+    -o "${RESPONSE_BODY}") || true
 if [[ "${HTTP_CODE}" == "200" || "${HTTP_CODE}" == "201" ]]; then
     echo "  Host type '${AGENT_RESOURCE_CLASS}' created"
 elif [[ "${HTTP_CODE}" == "409" ]]; then
     echo "  Host type '${AGENT_RESOURCE_CLASS}' already exists"
 else
     echo "  ERROR: Failed to create host type (HTTP ${HTTP_CODE})"
+    cat "${RESPONSE_BODY}"
+    rm -f "${RESPONSE_BODY}"
     exit 1
 fi
+rm -f "${RESPONSE_BODY}"
 
 echo "[2/6] Creating agent namespace and CAPI provider role..."
 oc create namespace "${AGENT_NAMESPACE}" --dry-run=client -o yaml | oc apply -f -
@@ -81,7 +100,8 @@ EOF
 
 echo "Waiting for discovery ISO URL..."
 retry_until 300 5 '[[ -n "$(oc get infraenv ${AGENT_NAMESPACE} -n ${AGENT_NAMESPACE} -o jsonpath="{.status.isoDownloadURL}" 2>/dev/null)" ]]' || {
-    echo "Timed out waiting for ISO URL"
+    echo "Timed out waiting for ISO URL. Current InfraEnv state:"
+    oc get infraenv "${AGENT_NAMESPACE}" -n "${AGENT_NAMESPACE}" -o yaml 2>&1 || true
     exit 1
 }
 ISO_URL=$(oc get infraenv "${AGENT_NAMESPACE}" -n "${AGENT_NAMESPACE}" -o jsonpath='{.status.isoDownloadURL}')
@@ -108,10 +128,21 @@ echo "[5/6] Creating agent VM..."
 timeout -s 9 10m ssh -F "${SSH_CONFIG}" ci_machine bash -s <<SSHEOF
 set -euo pipefail
 
+dnf install -y virt-install
+
 mkdir -p ${AGENT_VM_STORAGE_DIR}
 
+echo "Waiting for assisted-image-service to be ready..."
+for attempt in \$(seq 1 30); do
+    HTTP_CODE=\$(curl -k -s -o /dev/null -w "%{http_code}" -L '${ISO_URL}') || true
+    [[ "\${HTTP_CODE}" == "200" ]] && break
+    echo "  attempt \${attempt}/30 - HTTP \${HTTP_CODE}, retrying in 10s..."
+    sleep 10
+done
+[[ "\${HTTP_CODE}" != "200" ]] && { echo "ERROR: assisted-image-service not ready after 30 attempts (last HTTP \${HTTP_CODE})"; exit 1; }
+
 echo "Downloading discovery ISO..."
-curl -k -L --fail -o ${AGENT_VM_STORAGE_DIR}/discovery.iso '${ISO_URL}'
+curl -k -L --fail-with-body -o ${AGENT_VM_STORAGE_DIR}/discovery.iso '${ISO_URL}'
 
 virsh destroy ${AGENT_VM_NAME} 2>/dev/null || true
 virsh undefine ${AGENT_VM_NAME} 2>/dev/null || true
@@ -135,7 +166,9 @@ SSHEOF
 
 echo "[6/6] Waiting for agent to register..."
 retry_until 600 10 '[[ $(oc get agent -n ${AGENT_NAMESPACE} --no-headers 2>/dev/null | wc -l) -gt 0 ]]' || {
-    echo "Timed out waiting for agent to register"
+    echo "Timed out waiting for agent to register. Current state:"
+    oc get infraenv -n "${AGENT_NAMESPACE}" -o yaml 2>&1 || true
+    oc get agent -n "${AGENT_NAMESPACE}" -o yaml 2>&1 || true
     exit 1
 }
 

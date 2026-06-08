@@ -269,7 +269,7 @@ echo ""
 if timeout 10 oc get crd networkattachmentdefinitions.k8s.cni.cncf.io &>/dev/null; then
     timeout 30 oc delete networkattachmentdefinition default -n openshift-ovn-kubernetes --ignore-not-found
 fi
-rm -f /tmp/kubeconfig.hub-access
+rm -f /tmp/kubeconfig.hub-access*
 
 echo "Cleaning up stale API services..."
 for api in $(timeout 10 oc get apiservice --no-headers 2>/dev/null | awk '/False/ {print $1}'); do

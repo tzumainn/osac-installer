@@ -49,17 +49,17 @@ pid_rt=$!
 # Recert triggers an AAP controller rollout on boot. Wait for it to finish
 # before mutating any resources, otherwise the operator cascade causes
 # multiple waves of rollouts that kill in-flight AAP jobs.
-oc rollout status deploy/osac-aap-controller-task -n "${INSTALLER_NAMESPACE}" --timeout=300s 2>/dev/null &
+oc rollout status deploy/osac-aap-controller-task -n "${INSTALLER_NAMESPACE}" --timeout=300s &
 pid_aap1=$!
-oc rollout status deploy/osac-aap-controller-web -n "${INSTALLER_NAMESPACE}" --timeout=300s 2>/dev/null &
+oc rollout status deploy/osac-aap-controller-web -n "${INSTALLER_NAMESPACE}" --timeout=300s &
 pid_aap2=$!
 
 failed=0
 wait ${pid_tm} || failed=1
 wait ${pid_kc} || failed=1
 wait ${pid_rt} || failed=1
-wait ${pid_aap1} || true
-wait ${pid_aap2} || true
+wait ${pid_aap1} || failed=1
+wait ${pid_aap2} || failed=1
 if (( failed )); then
     echo "ERROR: Cluster services did not stabilize within timeout"
     exit 1
@@ -95,7 +95,7 @@ keycloak_sync() {
     fi
 
     KC_URL="https://$(oc get route keycloak -n "${KEYCLOAK_NS}" -o jsonpath='{.spec.host}')"
-    retry_until 60 5 '[[ "$(curl -sk -o /dev/null -w %{http_code} '"${KC_URL}"'/realms/osac)" == "200" ]]' || {
+    retry_until 300 5 '[[ "$(curl -sk -o /dev/null -w %{http_code} '"${KC_URL}"'/realms/osac)" == "200" ]]' || {
         echo "Timed out waiting for Keycloak"
         exit 1
     }
@@ -164,20 +164,17 @@ failed=0
 wait ${pid_creds} || failed=1
 if (( failed )); then echo "ERROR: Failed to create fulfillment credentials"; exit 1; fi
 
+oc scale deploy/fulfillment-controller -n "${INSTALLER_NAMESPACE}" --replicas=0 2>/dev/null || true
 echo "[3/9] Applying kustomize overlay..."
 oc delete job -n "${INSTALLER_NAMESPACE}" --all --ignore-not-found
-# Exclude the AnsibleAutomationPlatform CR and bootstrap job from the apply.
-# Both already exist on the cluster from the snapshot. Re-applying the CR
-# triggers the AAP operator to reconcile and roll the controller-task
-# deployment, killing in-flight AAP jobs. The bootstrap job is redundant
-# on snapshot boot (AAP is already configured) and races the operator.
-# NOTE: if aap.yaml or job.yaml change, the snapshot must be recreated.
-if [[ "$(uname)" == "Darwin" ]]; then
-  sed -i '' '/aap\.yaml/d; /job\.yaml/d' base/osac-aap/config/base/kustomization.yaml
-else
-  sed -i '/aap\.yaml/d; /job\.yaml/d' base/osac-aap/config/base/kustomization.yaml
-fi
+# Exclude only the bootstrap job — it's redundant on snapshot boot and races
+# the operator. The AnsibleAutomationPlatform CR (aap.yaml) IS included because
+# it carries probe settings (task_readiness_period). Including it consolidates
+# operator triggers into one reconciliation instead of a separate oc patch.
+sed '/job\.yaml/d' base/osac-aap/config/base/kustomization.yaml > base/osac-aap/config/base/kustomization.yaml.tmp \
+    && mv base/osac-aap/config/base/kustomization.yaml.tmp base/osac-aap/config/base/kustomization.yaml
 oc apply -k "overlays/${INSTALLER_KUSTOMIZE_OVERLAY}"
+oc scale deploy/fulfillment-controller -n "${INSTALLER_NAMESPACE}" --replicas=0 2>/dev/null || true
 
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd -P)"
 PULL_SECRET="${REPO_ROOT}/overlays/${INSTALLER_KUSTOMIZE_OVERLAY}/files/quay-pull-secret.json"
@@ -293,7 +290,9 @@ done
 # Kustomize apply may have changed deployment images, triggering new rollouts
 # that run DB migrations. Wait for those to finish before restarting pods —
 # otherwise the restart kills pods mid-migration and leaves the DB dirty.
-for deploy in fulfillment-controller fulfillment-grpc-server fulfillment-rest-gateway fulfillment-ingress-proxy; do
+# fulfillment-controller is excluded — it was scaled down to prevent
+# crash-loops while Keycloak/certs stabilize; it starts after certs are ready.
+for deploy in fulfillment-grpc-server fulfillment-rest-gateway fulfillment-ingress-proxy; do
     oc rollout status "deploy/${deploy}" -n "${INSTALLER_NAMESPACE}" --timeout=300s &
     pids+=($!)
 done
@@ -302,6 +301,7 @@ for pid in "${pids[@]}"; do wait "${pid}" || failed=1; done
 wait ${pid_cdi} || failed=1
 if (( failed )); then echo "ERROR: TLS certificates or fulfillment rollouts not ready"; exit 1; fi
 echo "[5/9] TLS certificates ready, restarting pods..."
+oc scale deploy/fulfillment-controller -n "${INSTALLER_NAMESPACE}" --replicas=1
 for deploy in fulfillment-controller fulfillment-grpc-server fulfillment-rest-gateway fulfillment-ingress-proxy; do
     oc rollout restart "deploy/${deploy}" -n "${INSTALLER_NAMESPACE}"
 done
@@ -349,21 +349,6 @@ wait_aap_controller() {
         echo "Timed out waiting for AAP gateway API to respond"
         exit 1
     }
-    # Recert restarts the kube-apiserver, breaking the controller-task's
-    # in-cluster connections. The pod looks healthy but its scheduler can't
-    # launch jobs via container groups. Recycle the pod for fresh connections.
-    echo "[7/9] Recycling AAP controller-task pod..."
-    oc delete pod -n "${INSTALLER_NAMESPACE}" -l app.kubernetes.io/name=osac-aap-controller-task
-    oc wait pod -n "${INSTALLER_NAMESPACE}" -l app.kubernetes.io/name=osac-aap-controller-task \
-        --for=condition=Ready --timeout=300s
-    retry_until 120 5 '[[ "$(curl -sk -o /dev/null -w %{http_code} https://'"${AAP_ROUTE_HOST}"'/api/gateway/v1/)" == "200" ]]' || {
-        echo "Timed out waiting for AAP gateway after controller-task restart"
-        exit 1
-    }
-    # Component overrides can trigger AAP operator reconciliation that creates a
-    # new controller-task pod AFTER our recycle. Wait for the deployment to
-    # stabilize so we don't launch jobs on a half-ready pod.
-    oc rollout status deploy/osac-aap-controller-task -n "${INSTALLER_NAMESPACE}" --timeout=300s
     echo "[7/9] AAP controller Running, gateway responding"
 }
 

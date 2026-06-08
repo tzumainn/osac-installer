@@ -89,5 +89,43 @@ retry_command() {
     done
 }
 
+# HTTP request with retry. Outputs response body on success.
+# Returns 1 and prints ERROR to stderr on persistent failure.
+# Usage: http_retry <error_msg> <retries> <interval> [curl_args...]
+http_retry() {
+    local err_msg="$1" retries="$2" interval="$3"
+    shift 3
+    for attempt in $(seq 1 "$retries"); do
+        curl -ksS --fail-with-body "$@" && return 0
+        if (( attempt < retries )); then
+            echo "  http_retry: attempt ${attempt}/${retries} failed, retrying in ${interval}s..." >&2
+            sleep "$interval"
+        fi
+    done
+    echo "ERROR: ${err_msg}" >&2
+    return 1
+}
+
+# HTTP request with retry + jq parsing. Outputs parsed value on success.
+# Returns 1 and prints ERROR to stderr on persistent failure.
+# Usage: http_json <error_msg> <retries> <interval> <jq_filter> [curl_args...]
+http_json() {
+    local err_msg="$1" retries="$2" interval="$3" filter="$4"
+    shift 4
+    local result
+    for attempt in $(seq 1 "$retries"); do
+        if result=$(curl -ksS --fail-with-body "$@" | jq -r "$filter"); then
+            printf '%s\n' "$result"
+            return 0
+        fi
+        if (( attempt < retries )); then
+            echo "  http_json: attempt ${attempt}/${retries} failed, retrying in ${interval}s..." >&2
+            sleep "$interval"
+        fi
+    done
+    echo "ERROR: ${err_msg}" >&2
+    return 1
+}
+
 _LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${_LIB_DIR}/oc.sh"
