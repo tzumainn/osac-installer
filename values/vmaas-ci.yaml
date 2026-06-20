@@ -5,7 +5,7 @@
 operator:
   image:
     repository: ghcr.io/osac-project/osac-operator
-    tag: sha-4771f5f
+    tag: sha-9844504
     pullPolicy: Always
   provisioning:
     provider: "aap"
@@ -25,7 +25,7 @@ service:
   externalHostname: ""  # Set to fulfillment-api-<namespace>.apps.<cluster>.<domain>
   internalHostname: ""  # Set to fulfillment-internal-api-<namespace>.apps.<cluster>.<domain>
   images:
-    service: ghcr.io/osac-project/fulfillment-service:sha-ffdfd9f
+    service: ghcr.io/osac-project/fulfillment-service:sha-a553eee
     envoy: ghcr.io/osac-project/envoy:v1.33.0
   certs:
     issuerRef:
@@ -81,7 +81,7 @@ aap:
       name: "osac-aap"
   bootstrap:
     enabled: true
-    image: ghcr.io/osac-project/osac-aap:sha-1ada6eb
+    image: ghcr.io/osac-project/osac-aap:sha-75b6796
     cliImage: quay.io/openshift/origin-cli:4.20.0
     backoffLimit: 15
   configAsCode:
@@ -95,7 +95,7 @@ validation:
 # --- Database migration ---
 dbMigrate:
   enabled: false
-  image: ghcr.io/osac-project/fulfillment-service:sha-ffdfd9f
+  image: ghcr.io/osac-project/fulfillment-service:sha-a553eee
 
 # --- Bare Metal Fulfillment Operator ---
 bmf:
