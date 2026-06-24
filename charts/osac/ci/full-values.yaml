@@ -57,6 +57,9 @@ dbMigrate:
   image: ghcr.io/osac-project/fulfillment-service:latest
   dbUrlFile: "/etc/fulfillment-service/db/url"
 
+importAgents:
+  enabled: false
+
 clusterFulfillment:
   enabled: true
   config:
@@ -75,6 +78,10 @@ clusterFulfillment:
     HOSTED_CLUSTER_BASE_DOMAIN: "test.example.com"
     HOSTED_CLUSTER_CONTROLLER_AVAILABILITY_POLICY: "SingleReplica"
     HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY: "SingleReplica"
+    IMPORT_AGENTS_NAMESPACE: "hardware-inventory"
+    IMPORT_AGENTS_INFRAENV_NAME: "infraenv"
+    IMPORT_AGENTS_PULL_SECRET_NAME: "pull-secret"
+    IMPORT_AGENTS_DISABLE_BMC_CERT_VERIFICATION: "true"
   secret:
     NETRIS_PASSWORD: "test-password"
 
