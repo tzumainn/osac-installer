@@ -13,7 +13,9 @@ detected during rollout waits.
 
 from __future__ import annotations
 
+import base64
 import json
+import re
 import os
 import subprocess
 import sys
@@ -506,7 +508,87 @@ def find_csv(*, namespace: str, deploy_name: str) -> str:
     raise RuntimeError(f"CSV not found for deployment {deploy_name} in {namespace}")
 
 
+# Postgres target resolution for vmaas snapshot refresh (CI-only test chart path).
+# Production install uses the Bash helpers in scripts/lib.sh
+# (check_postgres_prerequisites and related functions). Keep both in sync when
+# changing URL parsing or endpoint checks.
+
+def _bundled_postgres_enabled(values_file: str) -> bool:
+    in_section = False
+    path = REPO_ROOT / values_file
+    for line in path.read_text().splitlines():
+        if line.startswith("bundledPostgres:"):
+            in_section = True
+            continue
+        if in_section and line and not line[0].isspace() and not line.lstrip().startswith("#"):
+            in_section = False
+        if in_section and re.match(r"^\s+enabled:\s*true\s*$", line.split("#", 1)[0]):
+            return True
+    return False
+
+
+def _parse_db_host_from_url(url: str) -> str:
+    if url.startswith("postgresql://"):
+        url = "postgres://" + url.removeprefix("postgresql://")
+    elif not url.startswith("postgres://"):
+        raise ValueError("invalid PostgreSQL URL scheme")
+    hostport = url.removeprefix("postgres://")
+    if "@" in hostport:
+        hostport = hostport.split("@", 1)[1]
+    hostport = hostport.split("/", 1)[0].split("?", 1)[0]
+    return hostport.split(":", 1)[0]
+
+
+def _resolve_postgres_service(host: str, install_namespace: str) -> tuple[str, str] | None:
+    if not host:
+        return None
+    if "." not in host:
+        return host, install_namespace
+    parts = host.split(".")
+    for i, part in enumerate(parts):
+        if part == "svc" and i >= 2:
+            return parts[0], parts[1]
+    if len(parts) == 2:
+        return parts[0], parts[1]
+    return None
+
+
+def _service_has_ready_endpoints(service: str, namespace: str) -> bool:
+    result = oc(
+        "get", "endpoints", service, "-n", namespace,
+        "-o", "jsonpath={.subsets[0].addresses[0].ip}",
+        capture=True, check=False,
+    )
+    return result.returncode == 0 and bool(result.stdout.strip())
+
+
+def _postgres_target(config: RefreshConfig) -> tuple[str, str]:
+    if _bundled_postgres_enabled(config.values_file):
+        return "postgres", config.namespace
+    result = oc(
+        "get", "secret", "fulfillment-db", "-n", config.namespace,
+        "-o", "jsonpath={.data.url}",
+        capture=True, check=False,
+    )
+    if result.returncode == 0 and result.stdout.strip():
+        try:
+            url = base64.b64decode(result.stdout.strip()).decode()
+            resolved = _resolve_postgres_service(
+                _parse_db_host_from_url(url), config.namespace,
+            )
+        except (ValueError, UnicodeDecodeError):
+            resolved = None
+        if resolved:
+            return resolved
+    return "postgres", config.namespace
+
+
 def upgrade_fulfillment_db(config: RefreshConfig) -> None:
+    """Deploy the integration-test postgres chart for vmaas snapshot refresh.
+
+    Production installs use operator-managed Postgres (see setup.sh). This path
+    exists only for CI clusters booted from snapshots that expect postgres:5432.
+    """
     print("  Upgrading fulfillment-db...")
     run(["helm", "upgrade", "--install", "fulfillment-db",
          "base/osac-fulfillment-service/it/charts/postgres/",
@@ -516,6 +598,14 @@ def upgrade_fulfillment_db(config: RefreshConfig) -> None:
          "--set", "databases[0].name=service",
          "--set", "databases[0].user=service",
          "--timeout", "5m", "--wait"])
+
+
+def maybe_upgrade_fulfillment_db(config: RefreshConfig) -> None:
+    service, target_namespace = _postgres_target(config)
+    if _service_has_ready_endpoints(service, target_namespace):
+        print("  PostgreSQL already available, skipping fulfillment-db upgrade")
+        return
+    upgrade_fulfillment_db(config)
 
 
 def adopt_resources_for_helm(config: RefreshConfig) -> None:
@@ -734,7 +824,7 @@ def main() -> None:
         ("create secrets", lambda: create_secrets(config)),
         ("ensure CA bundle", lambda: ensure_ca_bundle(config)),
         ("wait TLS certs", lambda: wait_tls_certs(config)),
-        ("upgrade fulfillment-db", lambda: upgrade_fulfillment_db(config)),
+        ("upgrade fulfillment-db", lambda: maybe_upgrade_fulfillment_db(config)),
     ])
     print(f"[Phase 2] Done ({time.time() - phase_start:.0f}s)\n")
 
